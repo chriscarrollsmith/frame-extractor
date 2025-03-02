@@ -1,26 +1,297 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Video Upload</title>
+    <title>Video Frame Extractor</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input[type="text"], input[type="number"], input[type="file"] {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        #results {
+            margin-top: 30px;
+            display: none;
+            border-top: 1px solid #ddd;
+            padding-top: 20px;
+        }
+        .frame-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-top: 15px;
+        }
+        .frame-card {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 10px;
+            width: 220px;
+        }
+        .frame-card img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 4px;
+        }
+        .loading {
+            display: none;
+            margin-top: 20px;
+            text-align: center;
+            font-style: italic;
+            color: #666;
+        }
+        .error {
+            color: #d9534f;
+            margin-top: 20px;
+            padding: 10px;
+            border: 1px solid #d9534f;
+            border-radius: 4px;
+            display: none;
+        }
+    </style>
 </head>
 <body>
-    <h1>Upload Video for Processing</h1>
-    <form action="https://chriscarrollsmith--example-sgl-vlm-model-generate-dev.modal.run" method="post" enctype="multipart/form-data">
-        <div>
+    <h1>Video Frame Extractor</h1>
+    <p>Upload a video and extract frames that match specific conditions using AI vision analysis.</p>
+    
+    <form id="uploadForm">
+        <div class="form-group">
             <label for="video_file">Select video file:</label>
-            <input type="file" id="video_file" name="video_file" accept="video/*">
+            <input type="file" id="video_file" name="video_file" accept="video/*" required>
         </div>
-        <div>
+        <div class="form-group">
             <label for="conditions">Conditions (comma-separated):</label>
-            <input type="text" id="conditions" name="conditions" value="a person is in the frame,the scene is outdoors">
+            <input type="text" id="conditions" name="conditions" 
+                   value="a person is in the frame,the scene is outdoors" required>
+            <small>Example: "a person is in the frame", "the scene is outdoors", "contains a dog"</small>
         </div>
-        <div>
-            <label for="fps">Frames per second:</label>
+        <div class="form-group">
+            <label for="fps">Frames per second to extract:</label>
             <input type="number" id="fps" name="fps" value="1" min="0.1" step="0.1">
+            <small>Lower values process fewer frames and are faster</small>
         </div>
-        <div>
+        <div class="form-group">
+            <label for="max_width">Maximum frame width:</label>
+            <input type="number" id="max_width" name="max_width" value="640" min="0" step="1">
+            <small>Lower values process smaller images and are faster (0 = original size)</small>
+        </div>
+        <div class="form-group">
+            <label for="auth_token">Authentication Token:</label>
+            <input type="text" id="auth_token" name="auth_token" required>
+            <small>Your API authentication token</small>
+        </div>
+        <div class="form-group">
             <button type="submit">Upload and Process</button>
         </div>
     </form>
+    
+    <div id="loading" class="loading">
+        <p>Processing video... This may take several minutes depending on the video length and conditions.</p>
+    </div>
+    
+    <div id="error" class="error"></div>
+    
+    <div id="results">
+        <h2>Results</h2>
+        <div id="summary"></div>
+        <h3>Matching Frames:</h3>
+        <div id="frames" class="frame-container"></div>
+    </div>
+
+    <script>
+        document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const videoFile = document.getElementById('video_file').files[0];
+            const conditions = document.getElementById('conditions').value;
+            const fps = document.getElementById('fps').value;
+            const maxWidth = document.getElementById('max_width').value;
+            const authToken = document.getElementById('auth_token').value;
+            
+            if (!videoFile) {
+                alert('Please select a video file');
+                return;
+            }
+            
+            if (!conditions) {
+                alert('Please enter at least one condition');
+                return;
+            }
+            
+            if (!authToken) {
+                alert('Please enter your authentication token');
+                return;
+            }
+            
+            // Show loading message
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('results').style.display = 'none';
+            document.getElementById('error').style.display = 'none';
+            
+            // Create form data
+            const formData = new FormData();
+            formData.append('video_file', videoFile);
+            formData.append('conditions', conditions);
+            formData.append('fps', fps);
+            formData.append('max_width', maxWidth);
+            
+            try {
+                // Replace with your actual endpoint URL
+                const endpoint = 'https://your-actual-deployed-endpoint.modal.run';
+                
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    body: formData,
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`Error: ${response.status} ${response.statusText}`);
+                }
+                
+                const result = await response.json();
+                
+                // Hide loading message
+                document.getElementById('loading').style.display = 'none';
+                
+                // Display results
+                document.getElementById('results').style.display = 'block';
+                
+                // Update summary
+                const summary = document.getElementById('summary');
+                summary.innerHTML = `
+                    <p>Processed ${result.total_processed_frames} frames</p>
+                    <p>Found ${result.total_matching_frames} matching frames</p>
+                    <p>Processing time: ${result.elapsed_seconds.toFixed(2)} seconds</p>
+                `;
+                
+                // Display frames
+                const framesContainer = document.getElementById('frames');
+                framesContainer.innerHTML = '';
+                
+                if (result.total_matching_frames > 0) {
+                    result.frames_that_matched.forEach(frame => {
+                        const frameCard = document.createElement('div');
+                        frameCard.className = 'frame-card';
+                        
+                        // Create image element that will load when clicked
+                        const img = document.createElement('img');
+                        img.alt = `Frame ${frame.frame_number}`;
+                        img.dataset.src = frame.download_url;
+                        
+                        // Create a placeholder until image is loaded
+                        img.src = 'data:image/svg+xml;charset=utf-8,%3Csvg xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22 viewBox%3D%220 0 300 200%22%3E%3Crect width%3D%22300%22 height%3D%22200%22 fill%3D%22%23cccccc%22%3E%3C%2Frect%3E%3Ctext x%3D%22150%22 y%3D%22100%22 font-size%3D%2220%22 text-anchor%3D%22middle%22 alignment-baseline%3D%22middle%22 font-family%3D%22Arial%2C sans-serif%22 fill%3D%22%23333333%22%3EClick to load%3C%2Ftext%3E%3C%2Fsvg%3E';
+                        
+                        // Add click handler to load the actual image
+                        img.addEventListener('click', function() {
+                            if (this.dataset.loaded) return;
+                            
+                            const downloadUrl = this.dataset.src;
+                            fetch(downloadUrl, {
+                                headers: {
+                                    'Authorization': `Bearer ${authToken}`
+                                }
+                            })
+                            .then(response => {
+                                if (!response.ok) throw new Error('Failed to load image');
+                                return response.blob();
+                            })
+                            .then(blob => {
+                                const objectUrl = URL.createObjectURL(blob);
+                                this.src = objectUrl;
+                                this.dataset.loaded = 'true';
+                            })
+                            .catch(error => {
+                                console.error('Error loading image:', error);
+                                this.alt = 'Error loading image';
+                            });
+                        });
+                        
+                        // Create download link
+                        const downloadLink = document.createElement('a');
+                        downloadLink.href = frame.download_url;
+                        downloadLink.textContent = `Download Frame ${frame.frame_number}`;
+                        downloadLink.download = frame.filename;
+                        downloadLink.target = '_blank';
+                        
+                        // Add custom header to the download link
+                        downloadLink.addEventListener('click', function(e) {
+                            e.preventDefault();
+                            
+                            fetch(this.href, {
+                                headers: {
+                                    'Authorization': `Bearer ${authToken}`
+                                }
+                            })
+                            .then(response => {
+                                if (!response.ok) throw new Error('Failed to download');
+                                return response.blob();
+                            })
+                            .then(blob => {
+                                const url = window.URL.createObjectURL(blob);
+                                const a = document.createElement('a');
+                                a.href = url;
+                                a.download = frame.filename;
+                                document.body.appendChild(a);
+                                a.click();
+                                window.URL.revokeObjectURL(url);
+                                a.remove();
+                            })
+                            .catch(error => {
+                                console.error('Error downloading:', error);
+                                alert('Error downloading the frame');
+                            });
+                        });
+                        
+                        // Add elements to the card
+                        frameCard.appendChild(img);
+                        frameCard.appendChild(document.createElement('br'));
+                        frameCard.appendChild(document.createTextNode(`Frame #${frame.frame_number}`));
+                        frameCard.appendChild(document.createElement('br'));
+                        frameCard.appendChild(downloadLink);
+                        
+                        framesContainer.appendChild(frameCard);
+                    });
+                } else {
+                    framesContainer.innerHTML = '<p>No matching frames found.</p>';
+                }
+                
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('error').style.display = 'block';
+                document.getElementById('error').textContent = `Error: ${error.message}`;
+            }
+        });
+    </script>
 </body>
 </html>

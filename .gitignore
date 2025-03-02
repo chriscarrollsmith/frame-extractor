@@ -53,6 +53,7 @@ Thumbs.db
 *.flv
 
 # Image files
+files/
 *.jpg
 *.jpeg
 *.png

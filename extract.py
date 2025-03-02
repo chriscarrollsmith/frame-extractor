@@ -6,7 +6,7 @@ from pathlib import Path
 
 import modal
 import requests
-from fastapi import UploadFile, File, Depends, HTTPException, status
+from fastapi import UploadFile, File, Depends, HTTPException, status, Form
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 
@@ -23,6 +23,10 @@ MODEL_CHAT_TEMPLATE = "qwen2-vl"
 
 # Set up authentication scheme
 auth_scheme = HTTPBearer()
+
+# Create a volume for storing extracted frames
+frames_volume = modal.Volume.from_name("extracted-frames", create_if_missing=True)
+VOLUME_PATH = "/frames"
 
 
 def download_model_to_image():
@@ -93,6 +97,7 @@ def verify_token(token: HTTPAuthorizationCredentials = Depends(auth_scheme)):
     scaledown_window=20 * MINUTES,  # Renamed from container_idle_timeout
     allow_concurrent_inputs=100,
     image=vlm_image,
+    volumes={VOLUME_PATH: frames_volume},  # Mount the volume
     secrets=[modal.Secret.from_name("frame-extractor-auth")],
 )
 class Model:
@@ -117,6 +122,9 @@ class Model:
             sgl.lang.chat_template.get_chat_template(MODEL_CHAT_TEMPLATE)
         )
         sgl.set_default_backend(self.runtime)
+        
+        # Create directory structure in the volume
+        os.makedirs(VOLUME_PATH, exist_ok=True)
 
     #
     # ORIGINAL SINGLE-IMAGE ENDPOINT (unchanged)
@@ -172,9 +180,9 @@ class Model:
     @modal.web_endpoint(method="POST", docs=True)
     async def process_video_upload(self, 
                                   video_file: UploadFile = File(...), 
-                                  conditions: str = None, 
-                                  fps: int = 1,
-                                  max_width: int = 640,
+                                  conditions: str = Form(...), 
+                                  fps: int = Form(1),
+                                  max_width: int = Form(640),
                                   token: str = Depends(verify_token)):
         """
         Process an uploaded video file.
@@ -185,27 +193,34 @@ class Model:
         - **max_width**: Maximum width for processing (default: 640, set to 0 for original size)
         """
         start = time.monotonic_ns()
-        request_id = uuid4()
+        request_id = str(uuid4())
         
-        # Parse conditions
-        if conditions:
+        # Debug the received parameters
+        print(f"Received parameters: conditions={conditions}, fps={fps}, max_width={max_width}")
+        
+        # Parse conditions - no defaults in the API endpoint
+        if conditions and conditions.strip():
             conditions_list = [c.strip() for c in conditions.split(",")]
+            print(f"Using conditions: {conditions_list}")
         else:
-            conditions_list = ["a person is in the frame", "the scene is outdoors"]
+            # If no conditions provided, don't use any (will match all frames)
+            conditions_list = []
+            print("No conditions provided - will match all frames")
             
         try:
-            # Create output directory for this request
-            output_dir = Path(f"/tmp/{request_id}")
-            output_dir.mkdir(exist_ok=True)
+            # Create output directory for this request in the volume
+            output_dir = Path(f"{VOLUME_PATH}/{request_id}")
+            os.makedirs(output_dir, exist_ok=True)
             
             print(f"Processing uploaded video for request {request_id} with conditions: {conditions_list}")
             
-            # Save the uploaded file
+            # Save the uploaded file to the volume
             video_path = output_dir / f"uploaded_video_{request_id}.mp4"
             
             # Read and write the file
             content = await video_file.read()
-            video_path.write_bytes(content)
+            with open(video_path, "wb") as f:
+                f.write(content)
             
             # Extract and check frames
             matching_frames = self._process_video(
@@ -216,10 +231,17 @@ class Model:
                 max_width=max_width
             )
             
+            # Commit changes to the volume to ensure persistence
+            frames_volume.commit()
+            
             elapsed = round((time.monotonic_ns() - start) / 1e9, 2)
             
+            # Add download URLs to each matched frame
+            for frame in matching_frames["matched_frames"]:
+                frame["download_url"] = f"{self.download_frame.web_url}?request_id={request_id}&frame_filename={frame['filename']}"
+            
             return {
-                "request_id": str(request_id),
+                "request_id": request_id,
                 "message": "Processing complete",
                 "frames_that_matched": matching_frames["matched_frames"],
                 "total_processed_frames": matching_frames["total_processed"],
@@ -246,9 +268,12 @@ class Model:
         import fastapi
         
         try:
-            frame_path = Path(f"/tmp/{request_id}/{frame_filename}")
-            if not frame_path.exists():
-                return {"error": "Frame not found"}
+            # Reload the volume to ensure we have the latest data
+            frames_volume.reload()
+            
+            frame_path = Path(f"{VOLUME_PATH}/{request_id}/{frame_filename}")
+            if not os.path.exists(frame_path):
+                return {"error": f"Frame not found at {frame_path}"}
                 
             # Return the image file
             return fastapi.responses.FileResponse(
@@ -310,7 +335,7 @@ class Model:
                     new_height = int(frame.shape[0] * scale)
                     frame = cv2.resize(frame, (max_width, new_height))
                 
-                # Save frame to temp file
+                # Save frame to volume
                 frame_path = output_dir / f"frame_{processed_count}.jpg"
                 cv2.imwrite(str(frame_path), frame)
                 
@@ -345,11 +370,15 @@ class Model:
                     print(f"✓ Frame {processed_count} matches all conditions!")
                 else:
                     # Remove frame if it doesn't match (save space)
-                    frame_path.unlink()
+                    if os.path.exists(frame_path):
+                        os.remove(frame_path)
             
             frame_index += 1
         
         cap.release()
+        
+        # Commit changes to the volume
+        frames_volume.commit()
         
         return {
             "total_processed": processed_count,
@@ -361,7 +390,7 @@ class Model:
         self.runtime.shutdown()
 
 @app.local_entrypoint()
-def main(video_path=None, max_width=640, conditions=None):
+def main(video_path=None, max_width=640, conditions=None, output_dir="./files"):
     """
     Test the video processing functionality with a local video file.
     
@@ -383,6 +412,9 @@ def main(video_path=None, max_width=640, conditions=None):
     if not os.path.exists(video_path):
         print(f"Error: Video file not found at {video_path}")
         return
+    
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
         
     model = Model()
     
@@ -393,6 +425,7 @@ def main(video_path=None, max_width=640, conditions=None):
     print(f"Testing video processing with local video: {video_path}")
     print(f"Conditions: {conditions}")
     print(f"Max width: {max_width}px")
+    print(f"Output directory: {output_dir}")
     
     # Get the auth token from environment
     auth_token = os.environ.get("AUTH_TOKEN")
@@ -403,6 +436,10 @@ def main(video_path=None, max_width=640, conditions=None):
     # Prepare the multipart form data
     with open(video_path, 'rb') as f:
         files = {'video_file': (os.path.basename(video_path), f, 'video/mp4')}
+        
+        # Debug the data being sent
+        print(f"Sending conditions parameter: '{conditions}'")
+        
         data = {
             'conditions': conditions,
             'fps': '1',  # Process 1 frame per second
@@ -412,6 +449,10 @@ def main(video_path=None, max_width=640, conditions=None):
         headers = {
             'Authorization': f'Bearer {auth_token}'
         }
+        
+        # Debug the full request
+        print(f"Sending request to: {model.process_video_upload.web_url}")
+        print(f"Request data: {data}")
         
         response = requests.post(
             model.process_video_upload.web_url,
@@ -427,15 +468,47 @@ def main(video_path=None, max_width=640, conditions=None):
         print(f"- Found {result.get('total_matching_frames', 0)} matching frames")
         print(f"- Processing time: {result.get('elapsed_seconds', 0):.2f} seconds")
         
+        # Create a request-specific subdirectory
+        request_id = result.get('request_id')
+        request_dir = os.path.join(output_dir, request_id)
+        os.makedirs(request_dir, exist_ok=True)
+        
+        # Save the JSON result for reference
+        with open(os.path.join(request_dir, "result.json"), "w") as f:
+            import json
+            json.dump(result, f, indent=2)
+        
         if result.get('total_matching_frames', 0) > 0:
             print("\nMatching frames:")
+            
+            # Download all frames
             for i, frame in enumerate(result.get('frames_that_matched', [])):
                 print(f"{i+1}. Frame #{frame['frame_number']}: {frame['filename']}")
                 
-                # Print download URL for each frame
-                download_url = f"{model.download_frame.web_url}?request_id={result.get('request_id')}&frame_filename={frame['filename']}"
-                print(f"   Download URL: {download_url}")
-                print(f"   curl -H 'Authorization: Bearer {auth_token}' '{download_url}' --output {frame['filename']}")
+                # Get download URL
+                download_url = frame.get('download_url')
+                if download_url:
+                    print(f"   Downloading from: {download_url}")
+                    
+                    # Download the frame
+                    try:
+                        frame_response = requests.get(
+                            download_url,
+                            headers={'Authorization': f'Bearer {auth_token}'}
+                        )
+                        
+                        if frame_response.ok:
+                            # Save to the output directory
+                            output_path = os.path.join(request_dir, frame['filename'])
+                            with open(output_path, 'wb') as f:
+                                f.write(frame_response.content)
+                            print(f"   ✓ Saved to {output_path}")
+                        else:
+                            print(f"   ✗ Failed to download: HTTP {frame_response.status_code}")
+                    except Exception as e:
+                        print(f"   ✗ Error downloading: {str(e)}")
+            
+            print(f"\nAll frames saved to: {request_dir}")
     else:
         print(f"Error: {response.status_code}")
         print(response.text)
