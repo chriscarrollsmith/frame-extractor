@@ -1,0 +1,20 @@
+[project]
+name = "frame-extractor"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "huggingface-hub>=0.29.1",
+    "modal>=0.73.78",
+    "opencv-python>=4.11.0.86",
+    "requests>=2.32.3",
+    "sglang>=0.4.3.post2",
+    "term-image>=0.7.2",
+    "transformers>=4.49.0",
+]
+
+[dependency-groups]
+dev = [
+    "python-dotenv>=1.0.1",
+]
