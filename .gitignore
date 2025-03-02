@@ -55,10 +55,6 @@ Thumbs.db
 # Image files
 files/
 *.jpg
-*.jpeg
-*.png
-*.gif
-*.bmp
 
 # IDE
 .specstory

@@ -1,6 +1,12 @@
 # Frame extractor
 
-This project is a self-hostable Modal app that will extract frames from a video based on a set of conditions. Currently, the app merely analyzes frames and returns information about the frames that match the conditions. We have plans to provide a download endpoint and gallery view in the future.
+This project is a self-hostable Modal app that will extract frames from a video based on a set of conditions. For example, here's how I extracted Volodymyr Zelensky's microsexpressions from a 20-second clip of his February 2025 meeting with Donald Trump:
+
+``` bash
+uv run modal run extract.py --video-path="/trump-zelensky-clip.mp4" --max-width=320 --conditions="zelensky appears skeptical or contemptuous of what trump is saying"
+```
+
+![](trump-zelensky-clip.gif)
 
 ## Prerequisites
 
